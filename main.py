@@ -8,7 +8,6 @@ from typing import Iterator
 from tqdm import tqdm
 import syncedlyrics
 from mutagen.flac import FLAC
-import ffmpeg
 
 _lyrics_semaphore = threading.Semaphore(3)
 
@@ -23,9 +22,23 @@ def iter_files(base: Path) -> Iterator[Path]:
             yield p.resolve()
 
 
-def rename_file(filepath: Path, new_name: str) -> None:
+def rename_file(filepath: Path, new_name: str) -> Path:
     target = filepath.with_name(new_name)
     filepath.rename(target)
+    lrc, new_lrc = filepath.with_suffix(".lrc"), target.with_suffix(".lrc")
+    if lrc.exists() and not new_lrc.exists():
+        lrc.rename(new_lrc)
+    return target
+
+
+def download_lrc(lrc_path: Path, title: str, artist: str) -> bool:
+    with _lyrics_semaphore:
+        lrc = syncedlyrics.search(f"{title} {artist}", providers=["Lrclib", "Megalobiz", "NetEase"])
+        time.sleep(0.3)
+
+    with open(lrc_path, "w", encoding="utf-8") as f:
+        f.write(lrc if lrc else "")
+    return bool(lrc)
 
 
 def get_audio_issues(path: Path) -> dict:
@@ -198,12 +211,7 @@ def process_file(fp: Path, nolrc: bool) -> str:
         return "\n".join(lines)
 
     log(f"  Fetching LRC for: {title} - {artist}")
-    with _lyrics_semaphore:
-        lrc = syncedlyrics.search(f"{title} {artist}", providers=["Lrclib", "Megalobiz", "NetEase"])
-        time.sleep(0.3)
-
-    with open(lrc_path, "w", encoding="utf-8") as f:
-        f.write(lrc if lrc else "")
+    download_lrc(lrc_path, title, artist)
 
     return "\n".join(lines)
 
