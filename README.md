@@ -58,6 +58,7 @@ What each command does:
 ```bash
 uv run gui.py [base_dir]
 ```
+<img width="1913" alt="image" src="https://github.com/user-attachments/assets/932f8402-194f-46da-b9fb-0a34d9df632f" />
 
 # Other Tools
 `apply_album_art.sh` - Recursively traverse all folders, automatically apply album art and resize to all FLACs that have a JPG/PNG in the same directory
