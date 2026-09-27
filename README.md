@@ -58,6 +58,7 @@ What each command does:
 ```bash
 uv run expergo.py gui
 ```
+<img width="1913" height="1038" alt="image" src="https://github.com/user-attachments/assets/192fabd5-a3bb-48f7-9b92-f90e01987352" />
 
 > [!TIP]
 > If you're using a Snowsky device, you can "emulate" playlist functionality by grouping songs together via the "Genre" tag
