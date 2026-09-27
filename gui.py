@@ -851,7 +851,7 @@ class CoverDialog(QDialog):
         self.status.clear()
         self._loaded = 0
         self.progress.start("Searching MusicBrainz")
-        self.progress.set_detail(f"{album} — {artist}" if artist else album)
+        self.progress.set_detail(f"{album} - {artist}" if artist else album)
 
         def run(task):
             for event in covers.search_with_thumbnails(album, artist):
@@ -1228,7 +1228,7 @@ class MainWindow(QMainWindow):
             self.log("No tracks with missing album art in the current selection.")
             return
         items = [
-            SimpleNamespace(key=key, tracks=tracks, name=f"{key[1]} — {key[0]}" if key[0] else key[1])
+            SimpleNamespace(key=key, tracks=tracks, name=f"{key[1]} - {key[0]}" if key[0] else key[1])
             for key, tracks in groups.items()
         ]
         tracks = [t for group in items for t in group.tracks]

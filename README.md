@@ -56,9 +56,11 @@ What each command does:
 - 
 # GUI
 ```bash
-uv run gui.py [base_dir]
+uv run expergo.py gui
 ```
-<img width="1913" alt="image" src="https://github.com/user-attachments/assets/932f8402-194f-46da-b9fb-0a34d9df632f" />
+
+> [!TIP]
+> If you're using a Snowsky device, you can "emulate" playlist functionality by grouping songs together via the "Genre" tag
 
 # Other Tools
 `apply_album_art.sh` - Recursively traverse all folders, automatically apply album art and resize to all FLACs that have a JPG/PNG in the same directory

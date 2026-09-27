@@ -255,7 +255,7 @@ class AlbumGroup:
     @property
     def name(self) -> str:
         artist, album = self.key
-        return f"{album} — {artist}" if artist else album
+        return f"{album} - {artist}" if artist else album
 
 
 def auto_cover_group(group: AlbumGroup, tries: int = 5) -> str:
@@ -471,6 +471,9 @@ def main() -> int:
     import sys
 
     argv = normalize_legacy_argv(list(sys.argv))
+    if "gui" in argv:
+        import gui
+        gui.main()
     args = build_parser().parse_args(argv[1:])
 
     base_dir = getattr(args, "base_dir", None)
