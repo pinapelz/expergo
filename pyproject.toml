@@ -9,6 +9,8 @@ dependencies = [
     "ffmpeg-python>=0.2.0",
     "mutagen>=1.47.0",
     "pillow>=12.2.0",
+    "pyqt6>=6.11.0",
+    "requests>=2.33.1",
     "syncedlyrics>=1.0.1",
     "tqdm>=4.67.3",
 ]
