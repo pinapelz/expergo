@@ -1,5 +1,6 @@
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -170,7 +171,41 @@ def normalize_loudness(path: Path, target_lufs: float = -14.0, target_tp: float 
     return path
 
 
-def process_file(fp: Path, nolrc: bool) -> str:
+REPLAYGAIN_REFERENCE_LUFS = -14.0
+
+
+def measure_loudness(path: Path) -> tuple[float, float]:
+    result = subprocess.run(
+        [
+            "ffmpeg", "-hide_banner", "-nostats",
+            "-i", str(path),
+            "-map", "0:a:0",
+            "-af", "ebur128=peak=true",
+            "-f", "null", "-",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    number = r"(-?(?:inf|\d+(?:\.\d+)?))"
+    loudness = re.findall(rf"^\s*I:\s*{number}\s*LUFS", result.stderr, re.MULTILINE)
+    peak = re.findall(rf"^\s*Peak:\s*{number}\s*dBFS", result.stderr, re.MULTILINE)
+    if not loudness or not peak:
+        raise RuntimeError(f"Could not parse loudness measurement for {path.name}")
+    return float(loudness[-1]), float(peak[-1])
+
+
+def write_replaygain(path: Path, reference_lufs: float = REPLAYGAIN_REFERENCE_LUFS) -> float:
+    loudness, peak_db = measure_loudness(path)
+    gain = reference_lufs - loudness
+    audio = FLAC(str(path))
+    audio["REPLAYGAIN_TRACK_GAIN"] = f"{gain:+.2f} dB"
+    audio["REPLAYGAIN_TRACK_PEAK"] = f"{10 ** (peak_db / 20):.6f}"
+    audio.save()
+    return gain
+
+
+def process_file(fp: Path, nolrc: bool, replaygain: bool = False) -> str:
     lines = []
     log = lines.append
 
@@ -214,8 +249,12 @@ def process_file(fp: Path, nolrc: bool) -> str:
         log(f"  Fixing via ffmpeg: {', '.join(reasons)}")
         fp = fix_with_ffmpeg(fp, issues["needs_sample_rate_fix"], issues["needs_bitdepth_fix"])
 
-    log("  Normalizing loudness to -14 LUFS")
-    fp = normalize_loudness(fp)
+    if replaygain:
+        gain = write_replaygain(fp)
+        log(f"  Wrote ReplayGain tags (track gain {gain:+.2f} dB, audio untouched)")
+    else:
+        log("  Normalizing loudness to -14 LUFS")
+        fp = normalize_loudness(fp)
 
     post_blocksize = getattr(FLAC(str(fp)).info, "max_blocksize", 4096)
     if post_blocksize > 4096:
@@ -379,10 +418,10 @@ def run_jobs(items: list, worker: Callable, workers: int, desc: str) -> tuple[in
     return ok, errors
 
 
-def command_process(base_dir: Path, workers: int, nolrc: bool) -> int:
+def command_process(base_dir: Path, workers: int, nolrc: bool, replaygain: bool = False) -> int:
     files = find_flacs(base_dir)
     _claimed_names.clear()
-    ok, errors = run_jobs(files, lambda fp: process_file(fp, nolrc), workers, "Applying Echo rules")
+    ok, errors = run_jobs(files, lambda fp: process_file(fp, nolrc, replaygain), workers, "Applying Echo rules")
     tqdm.write(f"Done: {ok} processed, {errors} errors")
     return 0 if errors == 0 else 1
 
@@ -447,6 +486,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_process = sub.add_parser("process", help="Apply full Echo rules")
     p_process.add_argument("base_dir", type=Path)
     p_process.add_argument("--nolrc", action="store_true", dest="nolrc")
+    p_process.add_argument("--replaygain", action="store_true",
+                           help="Write ReplayGain tags instead of destructively normalizing the audio")
     p_process.add_argument("-n", "--workers", type=int, default=1)
 
     p_lrc = sub.add_parser("auto-lrc", help="Fetch missing LRC files")
@@ -491,7 +532,7 @@ def main() -> int:
 
     match args.command:
         case "process":
-            return command_process(args.base_dir, args.workers, args.nolrc)
+            return command_process(args.base_dir, args.workers, args.nolrc, args.replaygain)
         case "auto-lrc":
             return command_auto_lrc(args.base_dir, args.workers, args.force)
         case "auto-cover":

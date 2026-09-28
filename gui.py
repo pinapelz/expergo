@@ -436,7 +436,7 @@ class TrackTable(QTableView):
 class ImportDialog(QDialog):
     imported = pyqtSignal()
 
-    def __init__(self, dest: Path | None, workers: int, nolrc: bool, parent=None):
+    def __init__(self, dest: Path | None, workers: int, nolrc: bool, replaygain: bool = False, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Add Songs")
         self.resize(1000, 600)
@@ -476,6 +476,12 @@ class ImportDialog(QDialog):
         self.organize.setToolTip("Uses Album Artist when set (keeps compilations together), otherwise Artist")
         self.nolrc = QCheckBox("Skip LRC download")
         self.nolrc.setChecked(nolrc)
+        self.replaygain = QCheckBox("Use ReplayGain")
+        self.replaygain.setChecked(replaygain)
+        self.replaygain.setToolTip("Write ReplayGain tags instead of destructively normalizing the audio.\n"
+                                   "Only effective if your player supports ReplayGain.")
+        self.replaygain.setEnabled(self.apply_rules.isChecked())
+        self.apply_rules.toggled.connect(self.replaygain.setEnabled)
         self.workers = QSpinBox()
         self.workers.setRange(1, 16)
         self.workers.setValue(workers)
@@ -483,6 +489,7 @@ class ImportDialog(QDialog):
         opts.addWidget(self.apply_rules)
         opts.addWidget(self.organize)
         opts.addWidget(self.nolrc)
+        opts.addWidget(self.replaygain)
         opts.addStretch()
         opts.addWidget(QLabel("Workers:"))
         opts.addWidget(self.workers)
@@ -554,7 +561,7 @@ class ImportDialog(QDialog):
         self.table.fit_columns()
 
     def _import_one(self, track: Track, dest_root: Path, layout: FolderLayout | None,
-                    apply_rules: bool, nolrc: bool) -> str:
+                    apply_rules: bool, nolrc: bool, replaygain: bool) -> str:
         with self._copy_lock:
             dest_dir = layout.folder_for(track.tags) if layout else dest_root
             dest_dir.mkdir(parents=True, exist_ok=True)
@@ -568,7 +575,7 @@ class ImportDialog(QDialog):
             shutil.copy2(lrc, target.with_suffix(".lrc"))
         write_tags(target, track)
         if apply_rules:
-            return f"Copied to {dest_dir}" + core.process_file(target.resolve(), nolrc)
+            return f"Copied to {dest_dir}" + core.process_file(target.resolve(), nolrc, replaygain)
 
         lines = [f"Copied {target.name} to {dest_dir}"]
         title, artist = track.tags["TITLE"].strip(), track.tags["ARTIST"].strip()
@@ -583,14 +590,15 @@ class ImportDialog(QDialog):
         if not self.dest.text().strip():
             QMessageBox.warning(self, "Add Songs", "Choose a destination folder first.")
             return
-        apply_rules, nolrc = self.apply_rules.isChecked(), self.nolrc.isChecked()
+        apply_rules, nolrc, replaygain = (self.apply_rules.isChecked(), self.nolrc.isChecked(),
+                                          self.replaygain.isChecked())
         if apply_rules and not tools_ok(self):
             return
         core._claimed_names.clear()
         self.import_btn.setEnabled(False)
         dest_root = Path(self.dest.text().strip()).expanduser().resolve()
         layout = FolderLayout(dest_root) if self.organize.isChecked() else None
-        fn = lambda t: self._import_one(t, dest_root, layout, apply_rules, nolrc)
+        fn = lambda t: self._import_one(t, dest_root, layout, apply_rules, nolrc, replaygain)
         self.worker = Worker(self.model.tracks, fn, self.workers.value(), self)
         self.worker.log.connect(self.log.appendPlainText)
         self.worker.progress.connect(self.progress.set_progress)
@@ -984,6 +992,9 @@ class MainWindow(QMainWindow):
         # Options
         self.nolrc_action = action("Skip LRC Download", None, checkable=True,
                                    tip="Don't fetch lyrics when applying the Echo rules or importing")
+        self.replaygain_action = action("Use ReplayGain Instead of Normalizing", None, checkable=True,
+                                        tip="Write ReplayGain tags instead of destructively normalizing the audio\n"
+                                            "(only effective if your player supports ReplayGain)")
         self.worker_group = QActionGroup(self)
         for n in (1, 2, 4, 8):
             act = action(f"{n} Worker{'s' if n > 1 else ''}", None, checkable=True)
@@ -1007,6 +1018,7 @@ class MainWindow(QMainWindow):
         tracks_menu.addAction(self.stop_action)
         options_menu = QMenu("&Options", self)
         options_menu.addAction(self.nolrc_action)
+        options_menu.addAction(self.replaygain_action)
         options_menu.addSeparator()
         options_menu.addSection("Parallel Workers")
         options_menu.addActions(self.worker_group.actions())
@@ -1176,18 +1188,21 @@ class MainWindow(QMainWindow):
         tracks = self.table.target_tracks()
         if not tracks or not tools_ok(self):
             return
+        replaygain = self.replaygain_action.isChecked()
+        loudness = "tagged with ReplayGain" if replaygain else "loudness-normalized"
         answer = QMessageBox.question(
             self,
             "Apply Echo rules",
             f"Apply Echo formatting rules to {len(tracks)} file(s)?\n\n"
-            "Files are renamed, re-encoded, loudness-normalized and have their album art resized IN PLACE.\n"
+            f"Files are renamed, re-encoded, {loudness} and have their album art resized IN PLACE.\n"
             "Unsaved edits on these rows are saved first.",
         )
         if answer != QMessageBox.StandardButton.Yes or not self.save_changes(tracks):
             return
         core._claimed_names.clear()
         nolrc = self.nolrc_action.isChecked()
-        self.run_worker("Applying Echo rules", [t.path for t in tracks], lambda p: core.process_file(p, nolrc),
+        self.run_worker("Applying Echo rules", [t.path for t in tracks],
+                        lambda p: core.process_file(p, nolrc, replaygain),
                         lambda _: self.rescan())
 
     def fetch_missing_lrc(self):
@@ -1297,7 +1312,8 @@ class MainWindow(QMainWindow):
         self.run_worker("Reorganizing folders", moves, move_track, done, workers=1)
 
     def add_songs(self):
-        dialog = ImportDialog(self.folder, self.worker_count(), self.nolrc_action.isChecked(), self)
+        dialog = ImportDialog(self.folder, self.worker_count(), self.nolrc_action.isChecked(),
+                              self.replaygain_action.isChecked(), self)
         dialog.imported.connect(self.rescan)
         dialog.exec()
         dialog.deleteLater()

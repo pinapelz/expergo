@@ -16,9 +16,12 @@ These are the rules that the CLI applies (can be OPTIONALLY applied from the GUI
 - Re-encodes files with block size higher than 4096 via `flac` CLI
 - Rename FLAC file to `TRACK_NAME - ARTIST.flac`
 - Resize embedded album art to 500x500px (good enough for small screen players, without taking up much space)
-- Normalize all audio to -14 LUFS
+- Normalize all audio to -14 LUFS (or, with `--replaygain`, write ReplayGain tags instead and leave the audio untouched)
 - Download LRC files (places them in same folder with same name, according to Snowsky Echo rules)
   - A delay of 0.3 sec is hardcoded to avoid rate limit, this is a hard limit across all threads (if running multithreaded)
+
+> [!DANGER]
+> Audio normalization is DESTRUCTIVE by default! This is because some DAPs do not support the ReplyGain tag. You can toggle ReplayGain by clicking the drop down under the "Echo Rules" button.
 
 # External Dependencies
 You need the FLAC command line tool to be accessible globally, meaning it must be able to run anywhere on your machine. Using the official tool was the most consistent way of fixing the block-size issue cross-platform.
@@ -38,12 +41,12 @@ uv sync
 
 **Apply Echo Rules:**
 ```bash
-uv run expergo.py <base_dir> [--nolrc] [-n workers]
+uv run expergo.py <base_dir> [--nolrc] [--replaygain] [-n workers]
 ```
 
 **Subcommands:**
 ```bash
-uv run expergo.py process <base_dir> [--nolrc] [-n workers]
+uv run expergo.py process <base_dir> [--nolrc] [--replaygain] [-n workers]
 uv run expergo.py auto-lrc <base_dir> [--force] [-n workers]
 uv run expergo.py auto-cover <base_dir> [--force] [--tries N] [-n workers]
 uv run expergo.py reorg <base_dir> [--artist-only] [--no-cleanup] [-n workers]
