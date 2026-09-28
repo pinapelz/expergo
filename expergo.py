@@ -18,12 +18,21 @@ _lyrics_semaphore = threading.Semaphore(3)
 
 _claimed_names: set[Path] = set()
 _claimed_names_lock = threading.Lock()
-
+_windows_winerror_warning_sent = threading.Event()
 
 def iter_files(base: Path) -> Iterator[Path]:
     for p in base.rglob("*"):
-        if p.is_file():
-            yield p.resolve()
+        try:
+            if p.is_file():
+                yield p.resolve()
+        except OSError as e:
+            if getattr(e, 'winerror', None) == 234:
+                if not _windows_winerror_warning_sent.is_set():
+                    print("[WARNING] UTF-8 Beta is enabled on this device, bypassing WinError 234")
+                    _windows_winerror_warning_sent.set()
+                yield p
+            else:
+                continue
 
 
 def find_flacs(base_dir: Path) -> list[Path]:
