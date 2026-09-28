@@ -1,7 +1,8 @@
 # expergo
 #### An opinionated music library tool to help you manage your FLACs, compatible with the Snowsky Echo/Mini.
 
-<img width="1920" alt="image" src="https://github.com/user-attachments/assets/6e09e90c-1406-43ef-a1d8-fa99e1c73588" />
+<img width="1920" height="1012" alt="image" src="https://github.com/user-attachments/assets/3f541f03-c4a0-4a1e-a44f-1f3f96f5ee9f" />
+
 
 ---
 
@@ -59,6 +60,7 @@ What each command does:
 uv run expergo.py gui
 ```
 <img width="1913" height="1038" alt="image" src="https://github.com/user-attachments/assets/192fabd5-a3bb-48f7-9b92-f90e01987352" />
+<img width="1000" height="600" alt="image" src="https://github.com/user-attachments/assets/967e3a67-46a2-4abd-8c07-df56d6cea9ca" />
 
 > [!TIP]
 > If you're using a Snowsky device, you can "emulate" playlist functionality by grouping songs together via the "Genre" tag
