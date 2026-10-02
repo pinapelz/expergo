@@ -15,9 +15,10 @@ from PyQt6.QtCore import (
     Qt,
     QThread,
     QTimer,
+    QUrl,
     pyqtSignal,
 )
-from PyQt6.QtGui import QAction, QActionGroup, QBrush, QColor, QIcon, QKeySequence, QPixmap
+from PyQt6.QtGui import QAction, QActionGroup, QBrush, QColor, QDesktopServices, QIcon, QKeySequence, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -969,6 +970,8 @@ class MainWindow(QMainWindow):
         reorg_act = action("Reorganize…", self.reorganize, ("folder-new", SP.SP_FileDialogDetailedView),
                            "Ctrl+Shift+O", "Move every track in the library into Artist / Album folders (with preview)")
         # Processing
+        self.preview_action = action("Preview", self.preview_track, ("media-playback-start", SP.SP_MediaPlay),
+                                     tip="Open the selected track in the system default player")
         rules_act = action("Apply Echo Rules", self.process, ("system-run", SP.SP_MediaPlay), "Ctrl+R",
                            "Rename, resample, fix blocksize, normalize, resize art, fetch LRC\n"
                            "(selected rows, or all visible rows if none selected)")
@@ -1002,7 +1005,8 @@ class MainWindow(QMainWindow):
             act.setChecked(n == 1)
             self.worker_group.addAction(act)
 
-        self.busy_actions = [open_act, rescan_act, save_act, add_act, reorg_act, rules_act, lrc_act, art_fetch_act]
+        self.busy_actions = [open_act, rescan_act, save_act, add_act, reorg_act, rules_act, lrc_act, art_fetch_act,
+                             self.preview_action]
         menubar = self.menuBar()
         file_menu = menubar.addMenu("&File")
         file_menu.addActions([open_act, rescan_act, save_act])
@@ -1011,6 +1015,8 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(action("Quit", self.close, shortcut="Ctrl+Q"))
         tracks_menu = menubar.addMenu("&Tracks")
+        tracks_menu.addAction(self.preview_action)
+        tracks_menu.addSeparator()
         tracks_menu.addActions([rules_act, lrc_act, art_fetch_act])
         tracks_menu.addSeparator()
         tracks_menu.addActions(self.art_actions)
@@ -1034,13 +1040,14 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
         tb.addActions([add_act, reorg_act])
         tb.addSeparator()
+        tb.addAction(self.preview_action)
         tb.addAction(rules_act)
         rules_btn = tb.widgetForAction(rules_act)
         rules_btn.setMenu(options_menu)
         rules_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         tb.addActions([lrc_act, art_fetch_act])
 
-        self.table.extra_actions = self.art_actions
+        self.table.extra_actions = [self.preview_action, *self.art_actions]
         selection = self.table.selectionModel()
         selection.selectionChanged.connect(self._on_selection)
         selection.currentRowChanged.connect(self._on_selection)
@@ -1106,6 +1113,7 @@ class MainWindow(QMainWindow):
 
     def _on_selection(self, *_):
         tracks = self.table.selected_tracks()
+        self.preview_action.setEnabled(bool(tracks) and not self.worker)
         for act in self.art_actions:
             act.setEnabled(bool(tracks) and not self.worker)
         self.art_panel.show_track(self.table.current_track() if tracks else None, len(tracks))
@@ -1140,6 +1148,7 @@ class MainWindow(QMainWindow):
         for act in self.busy_actions:
             act.setEnabled(not busy)
         self.stop_action.setEnabled(busy)
+        self.preview_action.setEnabled(not busy and bool(self.table.selected_tracks()))
         for act in self.art_actions:
             act.setEnabled(not busy and bool(self.table.selected_tracks()))
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers if busy else EDIT_TRIGGERS)
@@ -1183,6 +1192,17 @@ class MainWindow(QMainWindow):
                 self.log(f"ERROR saving {track.name}: {e}")
         self.model.refresh()
         return ok
+
+    def preview_track(self):
+        track = self.table.current_track() or (self.table.selected_tracks()[0] if self.table.selected_tracks() else None)
+        if not track:
+            self.log("Select a track to preview.")
+            return
+        if not track.path.exists():
+            self.log(f"Preview failed: file does not exist: {track.path}")
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(track.path))):
+            self.log(f"Preview failed: could not launch default player for {track.name}")
 
     def process(self):
         tracks = self.table.target_tracks()
