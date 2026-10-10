@@ -188,7 +188,7 @@ class ProgressStrip(QFrame):
         self.bar = QProgressBar()
         self.bar.setMinimumWidth(200)
         self.detail = QLabel()
-        self.detail.setStyleSheet("color: palette(mid);")
+        self.detail.setStyleSheet("color: palette(placeholder-text);")
         # Ignored width so long filenames get clipped instead of stretching the window
         self.detail.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.clock = QLabel()
@@ -715,7 +715,7 @@ class ReorganizeDialog(QDialog):
 
 def section_label(text: str) -> QLabel:
     label = QLabel(text.upper())
-    label.setStyleSheet("font-weight: bold; font-size: 11px; color: palette(mid); padding: 2px 0;")
+    label.setStyleSheet("font-weight: bold; font-size: 11px; color: palette(placeholder-text); padding: 2px 0;")
     return label
 
 
@@ -730,7 +730,7 @@ class ArtPanel(QWidget):
         self.image.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self.caption = QLabel(alignment=Qt.AlignmentFlag.AlignCenter, wordWrap=True)
         self.info = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
-        self.info.setStyleSheet("color: palette(mid);")
+        self.info.setStyleSheet("color: palette(placeholder-text);")
 
         buttons = QHBoxLayout()
         buttons.addStretch()
