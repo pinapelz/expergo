@@ -10,6 +10,7 @@ from PIL import Image
 
 HEADERS = {"User-Agent": "SnowskyEchoFlacTool/0.1 ( https://github.com/pinapelz/fiio-snowsky-echo-flac-tool )"}
 MB_SEARCH_URL = "https://musicbrainz.org/ws/2/release/"
+MB_RELEASE_URL = "https://musicbrainz.org/ws/2/release/{mbid}"
 CAA_URL = "https://coverartarchive.org/release/{mbid}/front{size}"
 COVER_SIZE = 500
 
@@ -22,31 +23,58 @@ def _quote(text: str) -> str:
     return '"' + text.replace("\\", " ").replace('"', " ").strip() + '"'
 
 
-def search_releases(album: str, artist: str = "", limit: int = 25) -> list[dict]:
+def _mb_get(url: str, params: dict):
+    """GET against the MusicBrainz web service, honouring its ~1 request/second limit."""
     global _mb_last
-    query = f"release:{_quote(album)}"
-    if artist.strip():
-        query += f" AND artist:{_quote(artist)}"
     with _mb_lock:
         time.sleep(max(0.0, _mb_last + 1.1 - time.monotonic()))
         try:
-            resp = requests.get(
-                MB_SEARCH_URL,
-                params={"query": query, "fmt": "json", "limit": limit},
-                headers=HEADERS,
-                timeout=15,
-            )
+            resp = requests.get(url, params=params, headers=HEADERS, timeout=15)
         finally:
             _mb_last = time.monotonic()
     resp.raise_for_status()
+    return resp.json()
+
+
+def search_releases(album: str, artist: str = "", limit: int = 25) -> list[dict]:
+    query = f"release:{_quote(album)}"
+    if artist.strip():
+        query += f" AND artist:{_quote(artist)}"
+    payload = _mb_get(MB_SEARCH_URL, {"query": query, "fmt": "json", "limit": limit})
 
     releases = []
-    for rel in resp.json().get("releases", []):
+    for rel in payload.get("releases", []):
         credit = "".join(c.get("name", "") + c.get("joinphrase", "") for c in rel.get("artist-credit", []))
         formats = ", ".join(sorted({m["format"] for m in rel.get("media", []) if m.get("format")}))
         details = " · ".join(x for x in (rel.get("date", "")[:4], rel.get("country", ""), formats) if x)
         releases.append({"id": rel["id"], "title": rel.get("title", ""), "artist": credit, "details": details})
     return releases
+
+
+def _credit(entity: dict) -> str:
+    return "".join(c.get("name", "") + c.get("joinphrase", "") for c in entity.get("artist-credit", []))
+
+
+def fetch_release_tracks(mbid: str) -> list[dict]:
+    payload = _mb_get(MB_RELEASE_URL.format(mbid=mbid), {"fmt": "json", "inc": "recordings+artist-credits"})
+    release_artist = _credit(payload)
+
+    tracks = []
+    for disc, medium in enumerate(payload.get("media", []), start=1):
+        for track in medium.get("tracks", []):
+            recording = track.get("recording", {})
+            artist = _credit(track) or _credit(recording) or release_artist
+            try:
+                number = int(str(track.get("number", "")).strip())
+            except ValueError:
+                number = track.get("position") or len(tracks) + 1
+            tracks.append({
+                "disc": medium.get("position", disc),
+                "number": number,
+                "title": track.get("title") or recording.get("title", ""),
+                "artist": artist,
+            })
+    return tracks
 
 
 def fetch_cover(mbid: str, size: int | None = 250) -> bytes | None:

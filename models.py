@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -45,6 +46,18 @@ def find_flacs(paths) -> list[Path]:
 def flac_name(name: str) -> str:
     name = core.sanitize_filename(name)
     return name if name.lower().endswith(".flac") else name + ".flac"
+
+
+def track_number(path: Path) -> int | None:
+    try:
+        value = FLAC(str(path)).get("TRACKNUMBER", [""])[0]
+    except Exception:
+        value = ""
+    for text in (str(value), path.stem):
+        match = re.match(r"\s*0*(\d{1,3})\b", text)
+        if match:
+            return int(match.group(1))
+    return None
 
 
 @dataclass

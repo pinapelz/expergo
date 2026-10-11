@@ -71,6 +71,7 @@ from models import (
     plan_reorganize,
     remove_empty_dirs,
     save_track,
+    track_number,
     write_tags,
 )
 DIRTY_BRUSH = QBrush(QColor(255, 190, 0, 70))
@@ -454,8 +455,10 @@ class ImportDialog(QDialog):
         add_folder.clicked.connect(self._pick_folder)
         remove = QPushButton("Remove Selected")
         remove.clicked.connect(lambda: self.model.remove_rows(self.table.selected_rows()))
+        mb_info = QPushButton("MusicBrainz Album Info…")
+        mb_info.clicked.connect(self._musicbrainz_album_info)
         top = QHBoxLayout()
-        for w in (add_files, add_folder, remove):
+        for w in (add_files, add_folder, remove, mb_info):
             top.addWidget(w)
         top.addStretch()
         top.addWidget(QLabel("Tip: drag & drop FLACs or folders here"))
@@ -561,6 +564,50 @@ class ImportDialog(QDialog):
         self.model.add_tracks(new)
         self.table.fit_columns()
 
+    def _musicbrainz_album_info(self):
+        tracks = self.table.selected_tracks() or self.model.tracks
+        if not tracks:
+            QMessageBox.information(self, "Add Songs", "Add at least one track first.")
+            return
+
+        first = self.table.current_track() or tracks[0]
+        dialog = AlbumInfoDialog(first.tags["ALBUM"], (first.tags["ALBUMARTIST"] or first.tags["ARTIST"]),
+                                 len(tracks), self)
+        accepted = dialog.exec()
+        info = dialog.result_info
+        dialog.deleteLater()
+        if not accepted or not info:
+            return
+
+        album, album_artist = info["album"].strip(), info["album_artist"].strip()
+        by_number, tagged, unmatched = info["by_number"], 0, []
+        for track in tracks:
+            if album:
+                track.tags["ALBUM"] = album
+            if album_artist:
+                track.tags["ALBUMARTIST"] = album_artist
+            if not info["tag_tracks"]:
+                continue
+            number = track_number(track.path)
+            match = by_number.get(number) if number else None
+            if match:
+                title, artist = match
+                if title:
+                    track.tags["TITLE"] = title
+                if artist:
+                    track.tags["ARTIST"] = artist
+                tagged += 1
+            else:
+                unmatched.append(track.name)
+
+        self.model.refresh()
+        self.log.appendPlainText(f"Applied album info from MusicBrainz ({info['mbid']}) to {len(tracks)} track(s): "
+                                 f"ALBUM='{album}', ALBUMARTIST='{album_artist}'")
+        if info["tag_tracks"]:
+            self.log.appendPlainText(f"  Tagged {tagged} title(s)/artist(s) by track number")
+            for name in unmatched:
+                self.log.appendPlainText(f"  No tracklist match for {name} (missing/unknown track number)")
+
     def _import_one(self, track: Track, dest_root: Path, layout: FolderLayout | None,
                     apply_rules: bool, nolrc: bool, replaygain: bool) -> str:
         with self._copy_lock:
@@ -631,6 +678,228 @@ class ImportDialog(QDialog):
 
     def reject(self):
         self.close()
+
+
+class AlbumInfoDialog(QDialog):
+    def __init__(self, album: str, artist: str, count: int, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Album Info · {count} track(s)")
+        self.resize(900, 640)
+        self.result_info: dict | None = None
+        self._task: Task | None = None
+        self._releases: list[dict] = []
+
+        self.album = QLineEdit(album, placeholderText="Album")
+        self.artist = QLineEdit(artist, placeholderText="Artist (optional)")
+        for edit in (self.album, self.artist):
+            edit.returnPressed.connect(self.search)
+        search = QPushButton("Search")
+        search.clicked.connect(self.search)
+        top = QHBoxLayout()
+        top.addWidget(self.album, 3)
+        top.addWidget(self.artist, 2)
+        top.addWidget(search)
+
+        self.results = QListWidget()
+        self.results.setAlternatingRowColors(True)
+        self.results.itemDoubleClicked.connect(self._apply)
+        self.results.currentItemChanged.connect(self._on_release_changed)
+
+        self.tracks = QTableWidget(0, 3)
+        self.tracks.setHorizontalHeaderLabels(["#", "Title", "Artist"])
+        self.tracks.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.tracks.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.tracks.verticalHeader().setVisible(False)
+        self.tracks.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.tracks.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+
+        lists = QSplitter(Qt.Orientation.Horizontal)
+        releases_box = QWidget()
+        releases_layout = QVBoxLayout(releases_box)
+        releases_layout.setContentsMargins(0, 0, 0, 0)
+        releases_layout.addWidget(section_label("Releases"))
+        releases_layout.addWidget(self.results)
+        tracks_box = QWidget()
+        tracks_layout = QVBoxLayout(tracks_box)
+        tracks_layout.setContentsMargins(0, 0, 0, 0)
+        tracks_layout.addWidget(section_label("Tracklist"))
+        tracks_layout.addWidget(self.tracks)
+        lists.addWidget(releases_box)
+        lists.addWidget(tracks_box)
+        lists.setSizes([380, 520])
+
+        self.tag_titles = QCheckBox("Tag titles / artists by track number")
+        self.tag_titles.setChecked(True)
+        self.tag_titles.setToolTip("Match each row's track number against the MusicBrainz tracklist\n"
+                                   "and fill in TITLE and ARTIST")
+        self.status = QLabel()
+        self.apply_btn = QPushButton(f"Apply to {count} Track(s)")
+        self.apply_btn.setDefault(True)
+        self.apply_btn.setEnabled(False)
+        self.apply_btn.clicked.connect(self._apply)
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.reject)
+        bottom = QHBoxLayout()
+        bottom.addWidget(self.tag_titles)
+        bottom.addWidget(self.status, 1)
+        bottom.addWidget(self.apply_btn)
+        bottom.addWidget(cancel)
+
+        self.progress = ProgressStrip()
+
+        layout = QVBoxLayout(self)
+        layout.addLayout(top)
+        layout.addWidget(self.progress)
+        layout.addWidget(lists, 1)
+        layout.addLayout(bottom)
+
+        if album.strip():
+            self.search()
+
+    def search(self):
+        album, artist = self.album.text().strip(), self.artist.text().strip()
+        if not album:
+            self.status.setText("Enter an album name to search.")
+            return
+        self.results.clear()
+        self.tracks.setRowCount(0)
+        self._releases = []
+        self.status.clear()
+        self.apply_btn.setEnabled(False)
+        self.progress.start("Searching MusicBrainz")
+        self.progress.set_detail(f"{album} - {artist}" if artist else album)
+
+        def run(_task):
+            return covers.search_releases(album, artist)
+
+        self._task = Task(run)
+        self._task.done.connect(self._on_results)
+        self._task.failed.connect(self._on_failed)
+        self._task.start()
+
+    def _stale(self) -> bool:
+        return self.sender() is not self._task
+
+    def _on_results(self, releases):
+        if self._stale():
+            return
+        self.progress.finish()
+        self._releases = list(releases)
+        for rel in self._releases:
+            label = f"{rel['title']} — {rel['artist']}"
+            item = QListWidgetItem(f"{label}\n{rel['details']}" if rel["details"] else label)
+            item.setToolTip(f"{label}\n{rel['details']}\nMBID: {rel['id']}")
+            self.results.addItem(item)
+        if self._releases:
+            self.status.setText(f"{len(self._releases)} release(s) found.")
+            self.results.setCurrentRow(0)
+        else:
+            self.status.setText("No releases found.")
+
+    def _on_failed(self, message):
+        if not self._stale():
+            self.progress.finish()
+            self.status.setText(f"Search failed: {message}")
+
+    def _current_release(self) -> dict | None:
+        row = self.results.currentRow()
+        return self._releases[row] if 0 <= row < len(self._releases) else None
+
+    def _on_release_changed(self, *_):
+        release = self._current_release()
+        self.tracks.setRowCount(0)
+        self.apply_btn.setEnabled(bool(release))
+        if not release:
+            return
+        self.progress.start("Loading tracklist")
+        self.progress.set_detail(release["title"])
+        mbid = release["id"]
+
+        def run(_task):
+            return mbid, covers.fetch_release_tracks(mbid)
+
+        self._task = Task(run)
+        self._task.done.connect(self._on_tracks)
+        self._task.failed.connect(self._on_failed)
+        self._task.start()
+
+    def _on_tracks(self, payload):
+        if self._stale():
+            return
+        self.progress.finish()
+        mbid, tracks = payload
+        release = self._current_release()
+        if not release or release["id"] != mbid:
+            return
+        self.tracks.setRowCount(len(tracks))
+        for row, track in enumerate(tracks):
+            number = f"{track['disc']}-{track['number']}" if track["disc"] > 1 else str(track["number"])
+            for col, text in enumerate((number, track["title"], track["artist"])):
+                self.tracks.setItem(row, col, QTableWidgetItem(text))
+        self.status.setText(f"{len(tracks)} track(s) in {release['title']}.")
+
+    def _apply(self, *_):
+        release = self._current_release()
+        if not release:
+            return
+        by_number: dict[int, tuple[str, str]] = {}
+        for row in range(self.tracks.rowCount()):
+            number_item = self.tracks.item(row, 0)
+            title_item = self.tracks.item(row, 1)
+            artist_item = self.tracks.item(row, 2)
+            if not number_item:
+                continue
+            number = number_item.text().split("-")[-1]
+            if number.isdigit():
+                by_number[int(number)] = (title_item.text() if title_item else "",
+                                          artist_item.text() if artist_item else "")
+        self.result_info = {
+            "album": release["title"],
+            "album_artist": release["artist"],
+            "mbid": release["id"],
+            "tag_tracks": self.tag_titles.isChecked(),
+            "by_number": by_number,
+        }
+        self.accept()
+
+
+class RipCdDialog(QDialog):
+    def __init__(self, drives: list[tuple[str, str]], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Select optical drive")
+        self.resize(680, 360)
+        self.selected_drive: str | None = None
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Select the optical drive to use for CD ripping:"))
+
+        self.drives = QListWidget()
+        for path, label in drives:
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, path)
+            self.drives.addItem(item)
+        if drives:
+            self.drives.setCurrentRow(0)
+        self.drives.itemDoubleClicked.connect(lambda _: self._accept())
+        layout.addWidget(self.drives, 1)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        ok_btn = QPushButton("Use Drive")
+        ok_btn.clicked.connect(self._accept)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        buttons.addWidget(ok_btn)
+        buttons.addWidget(cancel_btn)
+        layout.addLayout(buttons)
+
+    def _accept(self):
+        item = self.drives.currentItem()
+        if not item:
+            QMessageBox.information(self, "No drive selected", "Select an optical drive first.")
+            return
+        self.selected_drive = item.data(Qt.ItemDataRole.UserRole)
+        self.accept()
 
 
 class ReorganizeDialog(QDialog):
@@ -939,6 +1208,8 @@ class MainWindow(QMainWindow):
         self.resize(1300, 850)
         self.folder: Path | None = None
         self.worker: Worker | None = None
+        self.rip_task: Task | None = None
+        self.rip_drive: str | None = None
 
         self.model = TrackModel()
         self.model.dataChanged.connect(self._update_status)
@@ -969,7 +1240,8 @@ class MainWindow(QMainWindow):
                          "Copy new FLACs into the library (optionally applying the Echo rules)")
         reorg_act = action("Reorganize…", self.reorganize, ("folder-new", SP.SP_FileDialogDetailedView),
                            "Ctrl+Shift+O", "Move every track in the library into Artist / Album folders (with preview)")
-        # Processing
+        rip_cd_act = action("Rip CD", self.rip_cd, ("media-optical", SP.SP_DirOpenIcon),
+                            tip="Rip tracks from an audio CD (stub)")
         self.preview_action = action("Preview", self.preview_track, ("media-playback-start", SP.SP_MediaPlay),
                                      tip="Open the selected track in the system default player")
         rules_act = action("Apply Echo Rules", self.process, ("system-run", SP.SP_MediaPlay), "Ctrl+R",
@@ -1005,13 +1277,13 @@ class MainWindow(QMainWindow):
             act.setChecked(n == 1)
             self.worker_group.addAction(act)
 
-        self.busy_actions = [open_act, rescan_act, save_act, add_act, reorg_act, rules_act, lrc_act, art_fetch_act,
-                             self.preview_action]
+        self.busy_actions = [open_act, rescan_act, save_act, add_act, reorg_act, rip_cd_act, rules_act, lrc_act,
+                             art_fetch_act, self.preview_action]
         menubar = self.menuBar()
         file_menu = menubar.addMenu("&File")
         file_menu.addActions([open_act, rescan_act, save_act])
         file_menu.addSeparator()
-        file_menu.addActions([add_act, reorg_act])
+        file_menu.addActions([add_act, reorg_act, rip_cd_act])
         file_menu.addSeparator()
         file_menu.addAction(action("Quit", self.close, shortcut="Ctrl+Q"))
         tracks_menu = menubar.addMenu("&Tracks")
@@ -1038,7 +1310,7 @@ class MainWindow(QMainWindow):
         self.addToolBar(tb)
         tb.addActions([open_act, rescan_act, save_act])
         tb.addSeparator()
-        tb.addActions([add_act, reorg_act])
+        tb.addActions([add_act, reorg_act, rip_cd_act])
         tb.addSeparator()
         tb.addAction(self.preview_action)
         tb.addAction(rules_act)
@@ -1338,8 +1610,80 @@ class MainWindow(QMainWindow):
         dialog.exec()
         dialog.deleteLater()
 
+    def rip_cd(self):
+        import optical
+
+        if self.worker or self.rip_task:
+            QMessageBox.information(self, "Busy", "A task is still running. Stop it first.")
+            return
+
+        ok, msg = optical.check_dependencies()
+        if not ok:
+            QMessageBox.critical(self, "Rip CD", msg)
+            return
+
+        drives = optical.get_optical_drives()
+        if not drives:
+            QMessageBox.information(self, "Rip CD", "No optical drives found.")
+            self.log("Rip CD: no optical drives found.")
+            return
+
+        dialog = RipCdDialog(drives, self)
+        accepted = dialog.exec()
+        selected_drive = dialog.selected_drive
+        dialog.deleteLater()
+        if not accepted or not selected_drive:
+            return
+
+        self.rip_drive = selected_drive
+        self.log(f"Rip CD selected drive: {self.rip_drive}")
+        self.log("Starting abcde rip (default config)…")
+
+        self._set_busy(True)
+        self.stop_action.setEnabled(False)
+        self.progress.start("Ripping CD", 1)
+        self.progress.set_detail(f"Ripping from {selected_drive}, Don't worry if the metadata is off you'll have a chance to fix it")
+
+        def run(task):
+            return optical.run_abcde_rip(
+                selected_drive,
+                on_output=lambda line: task.progress.emit(line),
+            )
+
+        self.rip_task = Task(run)
+        self.rip_task.progress.connect(lambda line: self.log(str(line)))
+
+        def done(flac_files):
+            self.rip_task = None
+            self.progress.finish()
+            self._set_busy(False)
+            if flac_files:
+                self.log(f"Rip complete: {len(flac_files)} FLAC file(s).")
+                for path in flac_files:
+                    self.log(path)
+
+                dialog = ImportDialog(self.folder, self.worker_count(), self.nolrc_action.isChecked(),
+                                      self.replaygain_action.isChecked(), self)
+                dialog.imported.connect(self.rescan)
+                dialog.add_paths(flac_files)
+                dialog.exec()
+                dialog.deleteLater()
+            else:
+                self.log("Rip complete: no FLAC files were found in output.")
+
+        def failed(err):
+            self.rip_task = None
+            self.progress.finish()
+            self._set_busy(False)
+            self.log(f"ERROR ripping CD: {err}")
+            QMessageBox.critical(self, "Rip CD", f"Ripping failed.\n\n{err}")
+
+        self.rip_task.done.connect(done)
+        self.rip_task.failed.connect(failed)
+        self.rip_task.start()
+
     def closeEvent(self, event):
-        if self.worker:
+        if self.worker or self.rip_task:
             QMessageBox.information(self, "Busy", "A task is still running. Stop it first.")
             event.ignore()
         elif self._confirm_discard():
