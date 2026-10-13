@@ -1241,7 +1241,7 @@ class MainWindow(QMainWindow):
         reorg_act = action("Reorganize…", self.reorganize, ("folder-new", SP.SP_FileDialogDetailedView),
                            "Ctrl+Shift+O", "Move every track in the library into Artist / Album folders (with preview)")
         rip_cd_act = action("Rip CD", self.rip_cd, ("media-optical", SP.SP_DirOpenIcon),
-                            tip="Rip tracks from an audio CD (stub)")
+                            tip="Rip tracks from an audio CD")
         self.preview_action = action("Preview", self.preview_track, ("media-playback-start", SP.SP_MediaPlay),
                                      tip="Open the selected track in the system default player")
         rules_act = action("Apply Echo Rules", self.process, ("system-run", SP.SP_MediaPlay), "Ctrl+R",
@@ -1619,8 +1619,29 @@ class MainWindow(QMainWindow):
 
         ok, msg = optical.check_dependencies()
         if not ok:
-            QMessageBox.critical(self, "Rip CD", msg)
-            return
+            if optical.needs_cuetools_install():
+                answer = QMessageBox.question(
+                    self,
+                    "Rip CD",
+                    (
+                        "CUERipper was not found.\n\n"
+                        "Download and install CUETools now?\n\n"
+                        f"Source: {optical.CUETOOLS_DOWNLOAD_URL}"
+                    ),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes,
+                )
+                if answer == QMessageBox.StandardButton.Yes:
+                    try:
+                        optical.ensure_windows_cuetools(on_output=self.log)
+                        ok, msg = optical.check_dependencies()
+                    except Exception as err:
+                        QMessageBox.critical(self, "Rip CD", f"Failed to install CUETools.\n\n{err}")
+                        return
+
+            if not ok:
+                QMessageBox.critical(self, "Rip CD", msg)
+                return
 
         drives = optical.get_optical_drives()
         if not drives:
@@ -1637,7 +1658,7 @@ class MainWindow(QMainWindow):
 
         self.rip_drive = selected_drive
         self.log(f"Rip CD selected drive: {self.rip_drive}")
-        self.log("Starting abcde rip (default config)…")
+        self.log("Starting CD ripping process…")
 
         self._set_busy(True)
         self.stop_action.setEnabled(False)

@@ -37,6 +37,23 @@ All other dependencies can be installed via `uv`
 uv sync
 ```
 
+# CD Ripping
+A bonus useful feature for ripping CDs right into expergo. Only supported on Windows and Linux.
+
+**Linux:** Requires [abcde](https://github.com/poddmo/abcde) to be installed. Please follow distro specific instructions
+
+**Windows:** All of the optical drive related functionalities are relegated to [CueRipper](https://github.com/gchudov/cuetools.net), expergo can automatically install this for you
+
+# GUI
+```bash
+uv run expergo.py gui
+```
+<img width="1913" height="1038" alt="image" src="https://github.com/user-attachments/assets/192fabd5-a3bb-48f7-9b92-f90e01987352" />
+<img width="1000" height="600" alt="image" src="https://github.com/user-attachments/assets/967e3a67-46a2-4abd-8c07-df56d6cea9ca" />
+
+> [!TIP]
+> If you're using a Snowsky device, you can "emulate" playlist functionality by grouping songs together via the "Genre" tag
+
 # CLI
 
 **Apply Echo Rules:**
@@ -57,16 +74,9 @@ What each command does:
 - `auto-lrc`: only fetch LRC files for FLACs (skips existing by default, `--force` overwrites)
 - `auto-cover`: only fetch album art using MusicBrainz + Cover Art Archive, grouped per album (uses album artist when present)
 - `reorg`: reorganize library into `Artist/Album/` folders, moving matching `.lrc` sidecars too
-- 
-# GUI
-```bash
-uv run expergo.py gui
-```
-<img width="1913" height="1038" alt="image" src="https://github.com/user-attachments/assets/192fabd5-a3bb-48f7-9b92-f90e01987352" />
-<img width="1000" height="600" alt="image" src="https://github.com/user-attachments/assets/967e3a67-46a2-4abd-8c07-df56d6cea9ca" />
 
-> [!TIP]
-> If you're using a Snowsky device, you can "emulate" playlist functionality by grouping songs together via the "Genre" tag
+**CD Ripping is not supported from the CLI at this time**
+
 
 # Other Tools
 `apply_album_art.sh` - Recursively traverse all folders, automatically apply album art and resize to all FLACs that have a JPG/PNG in the same directory
