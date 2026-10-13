@@ -270,25 +270,11 @@ def run_abcde_rip(
                 "or use auto-download from the Rip CD prompt."
             )
 
-        is_console = Path(cueripper).name.lower() == "cueripper.console.exe"
         rip_start = time.time()
+        if on_output:
+            on_output("CUERipper GUI opened. Start rip there and close it when done.")
 
-        if is_console:
-            cmd = [
-                cueripper,
-                "--drive",
-                drive,
-                "--output",
-                str(workspace),
-                "--format",
-                "flac",
-            ]
-        else:
-            if on_output:
-                on_output("CUERipper GUI opened. Start rip there and close it when done.")
-            cmd = [cueripper]
-
-        _run_streaming_command(cmd, workspace, on_output)
+        _run_streaming_command([cueripper], workspace, on_output)
 
         flacs_in_workspace = sorted(str(p.resolve()) for p in workspace.rglob("*.flac"))
         if flacs_in_workspace:
@@ -297,12 +283,7 @@ def run_abcde_rip(
         configured_output = os.environ.get("CUERIPPER_OUTPUT_DIR")
         search_roots = [
             workspace,
-            Path(cueripper).parent,
             Path.home() / "Music",
-            Path.home() / "Documents",
-            Path.home() / "Desktop",
-            Path.home() / "Downloads",
-            Path(tempfile.gettempdir()),
         ]
         if configured_output:
             search_roots.insert(0, Path(configured_output))
