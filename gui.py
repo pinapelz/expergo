@@ -18,7 +18,7 @@ from PyQt6.QtCore import (
     QUrl,
     pyqtSignal,
 )
-from PyQt6.QtGui import QAction, QActionGroup, QBrush, QColor, QDesktopServices, QIcon, QKeySequence, QPixmap
+from PyQt6.QtGui import QAction, QActionGroup, QBrush, QColor, QIcon, QKeySequence, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -41,6 +41,7 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSizePolicy,
+    QSlider,
     QSpinBox,
     QSplitter,
     QStyle,
@@ -52,6 +53,8 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 
 import covers
 import expergo as core
@@ -1059,6 +1062,108 @@ class ArtPanel(QWidget):
         self._rescale()
 
 
+class AudioPlayerPanel(QFrame):
+    def __init__(self, logger=None, parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+
+        self._log = logger or (lambda _msg: None)
+        self.player = QMediaPlayer(self)
+        self.audio = QAudioOutput(self)
+        self.audio.setMuted(False)
+        self.audio.setVolume(1.0)
+        self.player.setAudioOutput(self.audio)
+
+        self._duration = 0
+        self._current_path: Path | None = None
+
+        self.title = QLabel("No track loaded")
+        self.title.setStyleSheet("font-weight: bold;")
+        self.time = QLabel("0:00 / 0:00")
+        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider.setRange(0, 0)
+
+        self.play_btn = QToolButton()
+        self.play_btn.setIcon(std_icon("media-playback-start", QStyle.StandardPixmap.SP_MediaPlay))
+        self.play_btn.setToolTip("Play / Pause")
+        self.stop_btn = QToolButton()
+        self.stop_btn.setIcon(std_icon("media-playback-stop", QStyle.StandardPixmap.SP_MediaStop))
+        self.stop_btn.setToolTip("Stop")
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(8, 4, 8, 4)
+        row.addWidget(section_label("Preview"))
+        row.addWidget(self.title, 1)
+        row.addWidget(self.play_btn)
+        row.addWidget(self.stop_btn)
+        row.addWidget(self.time)
+        row.addWidget(self.slider, 2)
+
+        self.play_btn.clicked.connect(self.toggle_play_pause)
+        self.stop_btn.clicked.connect(self.stop)
+        self.slider.sliderMoved.connect(self.player.setPosition)
+
+        self.player.positionChanged.connect(self._on_position)
+        self.player.durationChanged.connect(self._on_duration)
+        self.player.playbackStateChanged.connect(self._on_state)
+        self.player.errorOccurred.connect(self._on_error)
+        self.player.mediaStatusChanged.connect(self._on_media_status)
+
+    def current_path(self) -> Path | None:
+        return self._current_path
+
+    def load(self, path: Path, autoplay: bool = True):
+        self._current_path = path
+        self.title.setText(path.name)
+        self.audio.setMuted(False)
+        self.player.stop()
+        self.player.setSource(QUrl.fromLocalFile(str(path)))
+        self.player.setPosition(0)
+        if autoplay:
+            self.player.play()
+
+    def toggle_play_pause(self):
+        if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.player.pause()
+        else:
+            self.player.play()
+
+    def stop(self):
+        self.player.stop()
+
+    def clear_if_matches(self, path: Path):
+        if self._current_path and self._current_path == path:
+            self.stop()
+            self._current_path = None
+            self.title.setText("No track loaded")
+            self._duration = 0
+            self.slider.setRange(0, 0)
+            self.time.setText("0:00 / 0:00")
+
+    def _on_position(self, pos: int):
+        if not self.slider.isSliderDown():
+            self.slider.setValue(pos)
+        self.time.setText(f"{format_duration(pos / 1000)} / {format_duration(self._duration / 1000)}")
+
+    def _on_duration(self, ms: int):
+        self._duration = max(0, ms)
+        self.slider.setRange(0, self._duration)
+        self.time.setText(f"{format_duration(self.player.position() / 1000)} / {format_duration(self._duration / 1000)}")
+
+    def _on_state(self, state):
+        icon = ("media-playback-pause", QStyle.StandardPixmap.SP_MediaPause) if state == QMediaPlayer.PlaybackState.PlayingState else ("media-playback-start", QStyle.StandardPixmap.SP_MediaPlay)
+        self.play_btn.setIcon(std_icon(*icon))
+
+    def _on_media_status(self, status):
+        if status == QMediaPlayer.MediaStatus.InvalidMedia and self._current_path:
+            self._log(f"Preview failed: unsupported/unreadable media: {self._current_path}")
+
+    def _on_error(self, _error, error_text: str):
+        if error_text:
+            self.title.setText(f"Preview error: {error_text}")
+            self._log(f"Preview error: {error_text}")
+
+
 class CoverDialog(QDialog):
     THUMB = 180
 
@@ -1243,7 +1348,7 @@ class MainWindow(QMainWindow):
         rip_cd_act = action("Rip CD", self.rip_cd, ("media-optical", SP.SP_DirOpenIcon),
                             tip="Rip tracks from an audio CD")
         self.preview_action = action("Preview", self.preview_track, ("media-playback-start", SP.SP_MediaPlay),
-                                     tip="Open the selected track in the system default player")
+                                     tip="Play/pause the selected track in the embedded player")
         rules_act = action("Apply Echo Rules", self.process, ("system-run", SP.SP_MediaPlay), "Ctrl+R",
                            "Rename, resample, fix blocksize, normalize, resize art, fetch LRC\n"
                            "(selected rows, or all visible rows if none selected)")
@@ -1263,6 +1368,8 @@ class MainWindow(QMainWindow):
                                       "(applies to all selected rows)")
         self.art_remove_action = action("Remove", self.remove_cover, ("edit-delete", SP.SP_TrashIcon),
                                         tip="Remove embedded album art from the selected rows")
+        self.delete_action = action("Delete File(s)…", self.delete_selected_tracks, ("edit-delete", SP.SP_TrashIcon), "Delete",
+                                    "Delete selected audio files from disk and remove them from the table")
         self.art_actions = [self.art_edit_action, self.art_remove_action]
         # Options
         self.nolrc_action = action("Skip LRC Download", None, checkable=True,
@@ -1278,7 +1385,7 @@ class MainWindow(QMainWindow):
             self.worker_group.addAction(act)
 
         self.busy_actions = [open_act, rescan_act, save_act, add_act, reorg_act, rip_cd_act, rules_act, lrc_act,
-                             art_fetch_act, self.preview_action]
+                             art_fetch_act, self.preview_action, self.delete_action]
         menubar = self.menuBar()
         file_menu = menubar.addMenu("&File")
         file_menu.addActions([open_act, rescan_act, save_act])
@@ -1288,6 +1395,7 @@ class MainWindow(QMainWindow):
         file_menu.addAction(action("Quit", self.close, shortcut="Ctrl+Q"))
         tracks_menu = menubar.addMenu("&Tracks")
         tracks_menu.addAction(self.preview_action)
+        tracks_menu.addAction(self.delete_action)
         tracks_menu.addSeparator()
         tracks_menu.addActions([rules_act, lrc_act, art_fetch_act])
         tracks_menu.addSeparator()
@@ -1313,13 +1421,14 @@ class MainWindow(QMainWindow):
         tb.addActions([add_act, reorg_act, rip_cd_act])
         tb.addSeparator()
         tb.addAction(self.preview_action)
+        tb.addAction(self.delete_action)
         tb.addAction(rules_act)
         rules_btn = tb.widgetForAction(rules_act)
         rules_btn.setMenu(options_menu)
         rules_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         tb.addActions([lrc_act, art_fetch_act])
 
-        self.table.extra_actions = [self.preview_action, *self.art_actions]
+        self.table.extra_actions = [self.preview_action, self.delete_action, self.art_edit_action]
         selection = self.table.selectionModel()
         selection.selectionChanged.connect(self._on_selection)
         selection.currentRowChanged.connect(self._on_selection)
@@ -1357,11 +1466,13 @@ class MainWindow(QMainWindow):
         splitter.setSizes([550, 280])
 
         self.progress = ProgressStrip(self.stop_action)
+        self.player_panel = AudioPlayerPanel(self.log, self)
 
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.addLayout(filters)
         layout.addWidget(self.progress)
+        layout.addWidget(self.player_panel)
         layout.addWidget(splitter, 1)
         self.setCentralWidget(central)
         self._on_selection()
@@ -1385,9 +1496,11 @@ class MainWindow(QMainWindow):
 
     def _on_selection(self, *_):
         tracks = self.table.selected_tracks()
-        self.preview_action.setEnabled(bool(tracks) and not self.worker)
+        enabled = bool(tracks) and not self.worker
+        self.preview_action.setEnabled(enabled)
+        self.delete_action.setEnabled(enabled)
         for act in self.art_actions:
-            act.setEnabled(bool(tracks) and not self.worker)
+            act.setEnabled(enabled)
         self.art_panel.show_track(self.table.current_track() if tracks else None, len(tracks))
 
     def _update_status(self, *_):
@@ -1420,9 +1533,11 @@ class MainWindow(QMainWindow):
         for act in self.busy_actions:
             act.setEnabled(not busy)
         self.stop_action.setEnabled(busy)
-        self.preview_action.setEnabled(not busy and bool(self.table.selected_tracks()))
+        selected = bool(self.table.selected_tracks())
+        self.preview_action.setEnabled(not busy and selected)
+        self.delete_action.setEnabled(not busy and selected)
         for act in self.art_actions:
-            act.setEnabled(not busy and bool(self.table.selected_tracks()))
+            act.setEnabled(not busy and selected)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers if busy else EDIT_TRIGGERS)
 
     def _confirm_discard(self) -> bool:
@@ -1465,6 +1580,60 @@ class MainWindow(QMainWindow):
         self.model.refresh()
         return ok
 
+    def _selected_source_rows(self) -> list[int]:
+        rows = self.table.selected_rows()
+        if not rows and self.table.currentIndex().isValid():
+            rows = [self.table.proxy.mapToSource(self.table.currentIndex()).row()]
+        return rows
+
+    def delete_selected_tracks(self):
+        rows = self._selected_source_rows()
+        if not rows:
+            self.log("Select at least one track to delete.")
+            return
+        tracks = [self.model.tracks[r] for r in rows]
+        answer = QMessageBox.warning(
+            self,
+            "Delete file(s)",
+            f"Delete {len(tracks)} file(s) from disk?\n\n"
+            "This permanently deletes the audio files and any sidecar .lrc files.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        removed_rows: list[int] = []
+        errors: list[str] = []
+        removed_files = removed_lrc = 0
+        for row, track in zip(rows, tracks):
+            path = track.path
+            try:
+                if path.exists():
+                    if not path.is_file():
+                        raise RuntimeError("path is not a file")
+                    path.unlink()
+                    removed_files += 1
+                lrc_path = path.with_suffix(".lrc")
+                if lrc_path.exists() and lrc_path.is_file():
+                    lrc_path.unlink()
+                    removed_lrc += 1
+                removed_rows.append(row)
+                self.player_panel.clear_if_matches(path)
+            except Exception as e:
+                errors.append(f"{track.name}: {e}")
+
+        if removed_rows:
+            self.model.remove_rows(removed_rows)
+            cleaned = remove_empty_dirs(self.folder) if self.folder else 0
+            self.log(f"Deleted {len(removed_rows)} track(s) from table ({removed_files} audio, {removed_lrc} LRC), removed {cleaned} empty folder(s).")
+            self._update_status()
+            self._on_selection()
+        if errors:
+            for err in errors:
+                self.log(f"ERROR deleting {err}")
+            QMessageBox.warning(self, "Delete finished with errors", "\n".join(errors[:8]))
+
     def preview_track(self):
         track = self.table.current_track() or (self.table.selected_tracks()[0] if self.table.selected_tracks() else None)
         if not track:
@@ -1473,8 +1642,10 @@ class MainWindow(QMainWindow):
         if not track.path.exists():
             self.log(f"Preview failed: file does not exist: {track.path}")
             return
-        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(track.path))):
-            self.log(f"Preview failed: could not launch default player for {track.name}")
+        if self.player_panel.current_path() == track.path:
+            self.player_panel.toggle_play_pause()
+        else:
+            self.player_panel.load(track.path, autoplay=True)
 
     def process(self):
         tracks = self.table.target_tracks()
@@ -1708,6 +1879,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Busy", "A task is still running. Stop it first.")
             event.ignore()
         elif self._confirm_discard():
+            self.player_panel.stop()
             event.accept()
         else:
             event.ignore()
