@@ -8,7 +8,7 @@ import requests
 from mutagen.flac import FLAC, Picture
 from PIL import Image
 
-HEADERS = {"User-Agent": "SnowskyEchoFlacTool/0.1 ( https://github.com/pinapelz/fiio-snowsky-echo-flac-tool )"}
+HEADERS = {"User-Agent": "expergo/0.2 ( https://github.com/pinapelz/expergo )"}
 MB_SEARCH_URL = "https://musicbrainz.org/ws/2/release/"
 MB_RELEASE_URL = "https://musicbrainz.org/ws/2/release/{mbid}"
 CAA_URL = "https://coverartarchive.org/release/{mbid}/front{size}"
