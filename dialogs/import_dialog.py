@@ -1,5 +1,7 @@
 import shutil
+import tempfile
 import threading
+import zipfile
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -14,6 +16,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QInputDialog,
     QSpinBox,
     QSplitter,
     QStyle,
@@ -44,6 +47,7 @@ class ImportDialog(QDialog):
         self.setAcceptDrops(True)
         self.worker = None
         self._copy_lock = threading.Lock()
+        self._zip_dirs: list[Path] = []
 
         self.model = TrackModel()
         self.table = TrackTable(self.model)
@@ -137,7 +141,7 @@ class ImportDialog(QDialog):
         self.add_paths([u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()])
 
     def _pick_files(self):
-        files, _ = QFileDialog.getOpenFileNames(self, "Add FLAC files", "", "FLAC (*.flac)")
+        files, _ = QFileDialog.getOpenFileNames(self, "Add FLAC files", "", "FLAC / ZIP archives (*.flac *.zip)")
         self.add_paths(files)
 
     def _pick_folder(self):
@@ -150,10 +154,39 @@ class ImportDialog(QDialog):
         if folder:
             self.dest.setText(folder)
 
+    def _zip_flacs(self, path: Path):
+        temp_dir = Path(tempfile.mkdtemp(prefix="expergo-zip-"))
+        self._zip_dirs.append(temp_dir)
+        try:
+            with zipfile.ZipFile(path) as zf:
+                pwd = None
+                if any(info.flag_bits & 0x1 for info in zf.infolist()):
+                    text, ok = QInputDialog.getText(self, "Password", f"Password for {path.name}:",
+                                                    QLineEdit.EchoMode.Password)
+                    if not ok:
+                        return
+                    pwd = text.encode()
+                zf.extractall(temp_dir, pwd=pwd)
+        except Exception as e:
+            self.log.appendPlainText(f"ERROR extracting {path.name}: {e}")
+            return
+        yield from find_flacs([temp_dir])
+
+    def _cleanup_zips(self):
+        for temp_dir in self._zip_dirs:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        self._zip_dirs.clear()
+
     def add_paths(self, paths):
         known = {t.path for t in self.model.tracks}
+        flacs = []
+        for path in paths:
+            if Path(path).suffix.lower() == ".zip":
+                flacs += self._zip_flacs(Path(path))
+            else:
+                flacs += find_flacs([path])
         new = []
-        for path in find_flacs(paths):
+        for path in flacs:
             if path in known:
                 continue
             try:
@@ -273,6 +306,7 @@ class ImportDialog(QDialog):
             QMessageBox.information(self, "Add Songs", "Import is still running.")
             event.ignore()
         else:
+            self._cleanup_zips()
             super().closeEvent(event)
 
     def reject(self):
