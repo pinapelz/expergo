@@ -20,8 +20,8 @@ These are the rules that the CLI applies (can be OPTIONALLY applied from the GUI
 - Download LRC files (places them in same folder with same name, according to Snowsky Echo rules)
   - A delay of 0.3 sec is hardcoded to avoid rate limit, this is a hard limit across all threads (if running multithreaded)
 
-> [!DANGER]
-> Audio normalization is DESTRUCTIVE by default! This is because some DAPs do not support the ReplyGain tag. You can toggle ReplayGain by clicking the drop down under the "Echo Rules" button.
+> [!WARNING]
+> **Audio normalization is DESTRUCTIVE by default!** This is because some DAPs (such as the Snowsky Echo Mini) do not support the ReplyGain tag. You can configure for ReplayGain to be used through the drop-down menu beside the `Echo Rules` button
 
 # External Dependencies
 You need the FLAC command line tool to be accessible globally, meaning it must be able to run anywhere on your machine. Using the official tool was the most consistent way of fixing the block-size issue cross-platform.
