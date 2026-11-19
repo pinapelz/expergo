@@ -110,7 +110,7 @@ class ImportDialog(QDialog):
         self.import_btn = QPushButton("Import && Apply Rules")
         self.import_btn.clicked.connect(self._import)
         close = QPushButton("Close")
-        close.clicked.connect(self.close)
+        close.clicked.connect(self.reject)
         bottom = QHBoxLayout()
         bottom.addWidget(self.progress, 1)
         bottom.addStretch()
@@ -301,13 +301,9 @@ class ImportDialog(QDialog):
         self.import_btn.setEnabled(True)
         self.imported.emit()
 
-    def closeEvent(self, event):
+    def reject(self):
         if self.worker:
             QMessageBox.information(self, "Add Songs", "Import is still running.")
-            event.ignore()
-        else:
-            self._cleanup_zips()
-            super().closeEvent(event)
-
-    def reject(self):
-        self.close()
+            return
+        self._cleanup_zips()
+        super().reject()
